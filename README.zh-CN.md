@@ -112,6 +112,17 @@ AZA-STT 同一时间只会运行一个实例。它可能已经在系统托盘运
 
 在系统托盘 AZA-STT 图标点击右键,选择 **重新输入 Groq API key**。保存后立即生效。
 
+### 如何完整移除?
+
+AZA-STT 没有安装器。双击 `Uninstall-AZA-STT.cmd`（或运行 `Uninstall-AZA-STT.ps1`）会结束程序,并删除:
+
+- `%LOCALAPPDATA%\AZA-STT`（API key、设置、日志）
+- 开机启动文件夹里的 `AZA-STT.lnk`
+- 尚未清掉的临时录音
+- 这个文件夹里的 `AZA-STT.exe`（若存在）
+
+解压后的 ZIP 文件夹请再手动删除。如果只下载过单独的 exe,在文件资源管理器搜索 `AZA-STT.exe` 后删除即可。本机删除后 Groq API key 仍然有效,不再使用请到 [Groq API Keys](https://console.groq.com/keys) 撤销。
+
 ## 隐私与安全
 
 AZA-STT 本身在你的 Windows 电脑上运行,没有自己的账号系统或中转服务器。

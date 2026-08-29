@@ -112,6 +112,17 @@ AZA-STT 同一時間只會執行一份。它可能已經在右下角通知區運
 
 在右下角 AZA-STT 圖示按右鍵,選擇 **重新輸入 Groq API key**。儲存後立即生效。
 
+### 如何完整移除?
+
+AZA-STT 沒有安裝器。雙擊 `Uninstall-AZA-STT.cmd`（或執行 `Uninstall-AZA-STT.ps1`）會結束程式,並刪除:
+
+- `%LOCALAPPDATA%\AZA-STT`（API key、設定、日誌）
+- 開機啟動資料夾裡的 `AZA-STT.lnk`
+- 尚未清掉的暫存錄音
+- 這個資料夾裡的 `AZA-STT.exe`（若存在）
+
+解壓後的 ZIP 資料夾請再手動刪除。若只下載過單獨的 exe,在檔案總管搜尋 `AZA-STT.exe` 後刪除即可。本機刪除後 Groq API key 仍有效,不再使用請到 [Groq API Keys](https://console.groq.com/keys) 撤銷。
+
 ## 隱私與安全
 
 AZA-STT 本身在你的 Windows 電腦上執行,沒有自己的帳號系統或中繼伺服器。
