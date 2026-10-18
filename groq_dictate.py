@@ -39,10 +39,18 @@ except ImportError:
 
 import keyboard
 import pyaudio
-import pyperclip
 from groq import Groq
 import opencc
 from pynput import mouse as pynput_mouse
+
+from paste_target import capture_foreground, paste_text
+from recording_session import (
+    arm_recording_start,
+    clip_rejection,
+    hit_duration_cap,
+    note_hold_release,
+)
+from transcription_errors import present_error, transcribe_with_rotation
 
 from transcription_interpreter import (
     LANGUAGE_MODES,
@@ -1466,6 +1474,12 @@ class GroqDictateApp:
         self.is_recording = False
         self.recording_started_event = Event()
         self.recording_error = None
+        self.ui_phase = "idle"
+        self.status_detail = None
+        self.paste_hwnd = None
+        self.stop_after_open = False
+        self.capture_ready = False
+        self.cancel_event = Event()
 
         self.is_key_held = False
         self.last_press_time = 0
@@ -1598,7 +1612,10 @@ class GroqDictateApp:
             self.on_key_up()
 
     def on_key_down(self, event=None):
-        if self.is_processing_ui or self.is_key_held:
+        if self.is_processing_ui:
+            self.cancel_event.set()
+            return
+        if self.is_key_held:
             return
 
         self.is_key_held = True
@@ -1630,31 +1647,31 @@ class GroqDictateApp:
     def on_key_up(self, event=None):
         was_held = self.is_key_held
         self.is_key_held = False
-        if (
-            was_held
-            and self.activation_mode == "hold"
-            and self.is_recording
-        ):
-            log_info("Hold control released, stopping recording...")
-            self.stop_recording_process()
+        if was_held and self.activation_mode == "hold":
+            action = note_hold_release(self)
+            if action == "stop_now":
+                log_info("Hold control released, stopping recording...")
+                self.stop_recording_process()
 
     def start_recording_process(self):
-        if not self.is_recording:
-            self.is_recording = True
-            self.frames = []
-            self.recording_error = None
-            self.recording_started_event.clear()
-            threading.Thread(target=self.record_thread, daemon=True).start()
-            if not self.recording_started_event.wait(MICROPHONE_START_TIMEOUT_SECONDS):
-                self.is_recording = False
-                self.root.after(0, lambda: self.set_ui_error("Microphone start timed out."))
-                return
-            if self.recording_error:
-                self.is_recording = False
-                return
-            self.root.after(0, self.set_ui_recording)
+        if self.is_recording or self.is_processing_ui:
+            return
+        self.cancel_event.clear()
+        self.capture_ready = False
+        arm_recording_start(
+            self,
+            capture_foreground,
+            MICROPHONE_START_TIMEOUT_SECONDS,
+            lambda: threading.Thread(
+                target=self.record_thread,
+                daemon=True,
+            ).start(),
+        )
 
     def stop_recording_process(self):
+        if not self.capture_ready:
+            self.stop_after_open = True
+            return
         if self.is_recording:
             self.is_recording = False
             self.is_processing_ui = True
@@ -1664,6 +1681,7 @@ class GroqDictateApp:
     def record_thread(self):
         stream = None
         audio = None
+        self.capture_ready = False
         try:
             # Refresh PortAudio for every recording. This avoids stale device
             # indexes after a USB or Bluetooth microphone is unplugged.
@@ -1683,15 +1701,23 @@ class GroqDictateApp:
                     f'Recording from microphone "{device["name"]}" '
                     f'({device["host_api"]}, device {device["index"]}).'
                 )
+            self.capture_ready = True
             self.recording_started_event.set()
 
             while self.is_recording and not self.stop_event.is_set():
                 data = stream.read(CHUNK, exception_on_overflow=False)
+                if not self.is_recording or self.stop_event.is_set():
+                    break
                 self.frames.append(data)
+                if hit_duration_cap(len(self.frames)):
+                    log_info("Recording reached the 240 second cap. Stopping and transcribing.")
+                    self.root.after(0, self.stop_recording_process)
+                    break
         except Exception as e:
+            self.capture_ready = False
             self.recording_error = str(e)
             log_info(f"Recording thread error: {e}")
-            self.root.after(0, lambda: self.set_ui_error(f"Recording failed: {e}"))
+            self.root.after(0, lambda message=f"Recording failed: {e}": self.set_ui_error(message))
             self.is_recording = False
             self.recording_started_event.set()
         finally:
@@ -1712,8 +1738,9 @@ class GroqDictateApp:
         wav_path = None
         log_info("=== Starting Audio Workflow ===")
         try:
-            if not self.frames:
-                raise RuntimeError("No audio frames were recorded.")
+            rejection_reason = clip_rejection(len(self.frames))
+            if rejection_reason:
+                raise RuntimeError(rejection_reason)
 
             wav_path = self.save_wav_file()
             if not wav_path:
@@ -1726,6 +1753,8 @@ class GroqDictateApp:
             final_text = interpretation.text
             log_info(f"Transcription success: {len(final_text)} characters")
 
+            if self.cancel_event.is_set():
+                raise RuntimeError("Transcription was cancelled.")
             if not self.simulate_typing(final_text):
                 raise RuntimeError("The transcription was copied, but automatic paste failed.")
             self.root.after(0, self.set_ui_success)
@@ -1789,55 +1818,24 @@ class GroqDictateApp:
             else:
                 log_info("FLAC compression unavailable. Uploading raw WAV.")
 
-        attempts = 0
-        max_attempts = len(self.api_keys) * len(self.models)
-        last_error = None
-
         try:
-            while attempts < max_attempts:
-                api_start = time.time()
-                current_model = self.models[self.current_model_index]
-                log_info(
-                    f"Attempting transcription: key #{self.current_key_index + 1}, "
-                    f"model \"{current_model}\" (attempt {attempts + 1}/{max_attempts})..."
-                )
-
-                try:
-                    with open(upload_path, "rb") as file:
-                        file_data = file.read()
-                        log_info(f"Payload size: {len(file_data)} bytes")
-                        transcription = self.client.audio.transcriptions.create(
-                            file=(upload_path, file_data),
-                            model=current_model,
-                            response_format="verbose_json",
-                            timestamp_granularities=["word", "segment"],
-                            language="zh",
-                            prompt=self.transcription_interpreter.prompt,
-                            temperature=0.0,
-                        )
-                    api_elapsed = time.time() - api_start
-                    log_info(f"Groq API call success, elapsed: {api_elapsed:.2f}s")
-                    return transcription
-                except Exception as e:
-                    last_error = e
-                    api_elapsed = time.time() - api_start
-                    log_info(
-                        f"Groq API call failed: key #{self.current_key_index + 1}, "
-                        f"model \"{current_model}\", elapsed: {api_elapsed:.2f}s, error: {e}"
-                    )
-
-                    self.current_model_index = (self.current_model_index + 1) % len(self.models)
-                    if self.current_model_index == 0:
-                        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
-                        next_key = self.api_keys[self.current_key_index]
-                        log_info(f"Switching to key #{self.current_key_index + 1}...")
-                        self.client = Groq(api_key=next_key, timeout=API_TIMEOUT_SECONDS)
-
-                    attempts += 1
-                    if attempts < max_attempts:
-                        time.sleep(0.5)
-
-            raise RuntimeError(f"All transcription attempts failed. Last error: {last_error}")
+            transcription, key_index, model_index = transcribe_with_rotation(
+                upload_path=upload_path,
+                prompt=self.transcription_interpreter.prompt,
+                api_keys=self.api_keys,
+                models=self.models,
+                client_factory=lambda key: Groq(
+                    api_key=key,
+                    timeout=API_TIMEOUT_SECONDS,
+                ),
+                sleep=time.sleep,
+                key_index=self.current_key_index,
+                model_index=self.current_model_index,
+                is_cancelled=lambda: self.cancel_event.is_set(),
+            )
+            self.current_key_index = key_index
+            self.current_model_index = model_index
+            return transcription
         finally:
             if compressed_path and os.path.exists(compressed_path):
                 try:
@@ -1847,19 +1845,7 @@ class GroqDictateApp:
                     log_info(f"Failed to clean temp FLAC: {e}")
 
     def simulate_typing(self, text):
-        """Use clipboard and Ctrl+V to paste text instantly."""
-        if not text:
-            return False
-        try:
-            log_info("Copying text to clipboard and triggering Ctrl+V...")
-            pyperclip.copy(text)
-            time.sleep(0.05)
-            keyboard.send('ctrl+v')
-            log_info("Ctrl+V keystroke sent.")
-            return True
-        except Exception as e:
-            log_info(f"Pasting failed: {e}")
-            return False
+        return paste_text(text, self.paste_hwnd)
 
     # ==========================================
     # GUI and Visuals
@@ -1956,6 +1942,10 @@ class GroqDictateApp:
                 lambda item: self.ui("開啟 Groq API Keys 網頁"),
                 self.enqueue_open_keys_page,
             ),
+            pystray.MenuItem(
+                lambda item: self.ui("開啟記錄檔"),
+                self.enqueue_open_log,
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 lambda item: self.ui("退出 AZA-STT"),
@@ -1993,6 +1983,8 @@ class GroqDictateApp:
             log_info(f"Startup tray notification failed: {error}")
 
     def tray_status_text(self):
+        if self.ui_phase == "error":
+            return self.status_detail
         if self.is_recording:
             return self.ui("AZA-STT - 錄音中")
         if self.is_processing_ui:
@@ -2020,6 +2012,8 @@ class GroqDictateApp:
 
     def enqueue_open_keys_page(self, icon=None, item=None):
         self.enqueue_ui_action(self.open_keys_page_from_tray)
+    def enqueue_open_log(self, icon=None, item=None):
+        self.enqueue_ui_action(self.open_log_from_tray)
 
     def enqueue_quit(self, icon=None, item=None):
         self.enqueue_ui_action(self.quit_app)
@@ -2227,6 +2221,15 @@ class GroqDictateApp:
                 self.ui(f"無法開啟瀏覽器。\n\n{GROQ_KEYS_URL}"),
                 parent=self.root,
             )
+    def open_log_from_tray(self):
+        try:
+            os.startfile(LOG_FILE_PATH)
+        except Exception as error:
+            messagebox.showerror(
+                "AZA-STT",
+                self.ui(f"無法開啟記錄檔。\n\n{LOG_FILE_PATH}\n\n{error}"),
+                parent=self.root,
+            )
 
     def set_tray_status(self, status):
         if not self.tray_icon:
@@ -2246,12 +2249,16 @@ class GroqDictateApp:
     def set_ui_idle(self):
         self.cancel_hide_timer()
         self.is_processing_ui = False
+        self.ui_phase = "idle"
+        self.status_detail = None
         self.root.withdraw()
         self.set_tray_status("idle")
 
     def set_ui_recording(self):
         self.cancel_hide_timer()
         self.is_processing_ui = False
+        self.ui_phase = "recording"
+        self.status_detail = ""
         self.root.deiconify()
         self.canvas.itemconfig(self.sphere, fill='#ff1a1a', outline='#4d0000', width=2)
         self.canvas.config(cursor="hand2")
@@ -2260,6 +2267,8 @@ class GroqDictateApp:
     def set_ui_processing(self):
         self.cancel_hide_timer()
         self.is_processing_ui = True
+        self.ui_phase = "processing"
+        self.status_detail = ""
         self.canvas.itemconfig(self.sphere, fill='#FF851B', outline='#B35900', width=2)
         self.canvas.config(cursor="watch")
         self.set_tray_status("processing")
@@ -2267,17 +2276,23 @@ class GroqDictateApp:
     def set_ui_success(self):
         self.cancel_hide_timer()
         self.is_processing_ui = False
+        self.ui_phase = "success"
+        self.status_detail = ""
         self.canvas.itemconfig(self.sphere, fill='#2ECC40', outline='#145A32', width=2)
         self.set_tray_status("success")
         self.hide_timer_id = self.root.after(1000, self.set_ui_idle)
 
     def set_ui_error(self, message):
         self.cancel_hide_timer()
+        message = present_error(message)
         self.is_processing_ui = False
+        self.ui_phase = "error"
+        self.status_detail = message
         self.canvas.itemconfig(self.sphere, fill='#666666', outline='#333333', width=2)
         self.canvas.config(cursor="x_cursor")
         log_info(f"❌ Error: {message}")
         self.set_tray_status("error")
+        messagebox.showerror("AZA-STT", message, parent=self.root)
         self.hide_timer_id = self.root.after(3000, self.set_ui_idle)
 
     def show_popup_menu(self, event):

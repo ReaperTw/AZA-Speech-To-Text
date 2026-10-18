@@ -57,8 +57,13 @@ class LoggingTests(unittest.TestCase):
     def test_log_info_does_not_crash_when_packaged_app_has_no_console(self, _print):
         log_info("packaged logging regression test")
 
+    @patch("groq_dictate.messagebox.showerror")
     @patch("builtins.print", side_effect=OSError(22, "Invalid argument"))
-    def test_error_ui_finishes_when_packaged_app_has_no_console(self, _print):
+    def test_error_ui_finishes_when_packaged_app_has_no_console(
+        self,
+        _print,
+        _showerror,
+    ):
         app = GroqDictateApp.__new__(GroqDictateApp)
         app.cancel_hide_timer = Mock()
         app.canvas = Mock()
@@ -72,6 +77,24 @@ class LoggingTests(unittest.TestCase):
 
         app.set_tray_status.assert_called_once_with("error")
         self.assertEqual(app.hide_timer_id, "timer-id")
+
+    @patch("groq_dictate.messagebox.showerror")
+    def test_error_tray_status_does_not_report_background_execution(
+        self,
+        _showerror,
+    ):
+        app = GroqDictateApp.__new__(GroqDictateApp)
+        app.cancel_hide_timer = Mock()
+        app.canvas = Mock()
+        app.sphere = "sphere"
+        app.root = Mock()
+        app.root.after.return_value = "timer-id"
+        app.set_tray_status = Mock()
+        app.set_ui_idle = Mock()
+
+        app.set_ui_error("網路逾時。請檢查網路後再錄一次。")
+
+        self.assertNotIn("背景執行中", app.tray_status_text())
 
 
 class NormalizeTranscriptionTests(unittest.TestCase):
@@ -232,12 +255,14 @@ class PromptLeakageTests(unittest.TestCase):
 class TranscriptionWorkflowTests(unittest.TestCase):
     def make_app(self, response, language_mode=LANGUAGE_TRADITIONAL):
         app = GroqDictateApp.__new__(GroqDictateApp)
-        app.frames = [b"recorded audio"]
+        app.frames = [b"recorded audio"] * 7
         app.transcription_interpreter = TranscriptionInterpreter(language_mode)
         app.transcribe_audio = Mock(return_value=response)
         app.simulate_typing = Mock(return_value=True)
         app.set_ui_success = Mock()
         app.set_ui_error = Mock()
+        app.cancel_event = Mock()
+        app.cancel_event.is_set.return_value = False
         app.root = Mock()
         app.root.after.side_effect = lambda _delay, callback: callback()
 
@@ -527,6 +552,9 @@ class RecordingActivationModeTests(unittest.TestCase):
         app.is_processing_ui = False
         app.is_key_held = False
         app.is_recording = False
+        app.capture_ready = True
+        app.stop_after_open = False
+        app.cancel_event = Mock()
         app.last_press_time = 0
         app.double_press_threshold = 0.4
 
