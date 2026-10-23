@@ -1,12 +1,12 @@
 # AZA-STT 改進企劃
 
-狀態：可交給其他 coding agent 執行  
-評估基準：v1.0.10 / `c993921`  
-最後檢視：2026-08-21
+狀態：T4 已落地，不要重做。T1、T3、T5 仍未做。不要再為行數拆檔。  
+評估基準：2026-10-18 / `main`  
+最後檢視：2026-10-18
 
 ## 結論
 
-Devin 的建議有一些值得做，但報告明顯沒有完整讀到目前版本。AZA-STT 已有 76 個測試、獨立的 `transcription_interpreter.py`、Groq 模型與 API key 輪替、背景執行緒、狀態燈、輸入驗證，以及 API key 檔案 ACL 限制。不能把這份報告當成待辦清單整包實作。
+Devin 的建議有一些值得做，但報告沒有完整讀到當時版本。下面「現況證據」才是目前程式。不能把這份報告當成待辦清單整包實作。
 
 真正值得投入的方向只有三個：
 
@@ -18,15 +18,13 @@ Devin 的建議有一些值得做，但報告明顯沒有完整讀到目前版�
 
 ## 現況證據
 
-- `groq_dictate.py`：2347 行，包含 Windows 錄音、快捷鍵、通知區、設定 UI、Groq 呼叫與貼上流程。
-- `transcription_interpreter.py`：430 行，已是獨立且可直接測試的轉錄 module。
-- 測試：`test_groq_dictate.py` 與 `test_transcription_interpreter.py`，目前共 76 tests。
-- `TranscriptionInterpreter` 在 app 啟動時建立，切換語言時才重建；OpenCC 不是每段文字重複初始化。
-- 長錄音達 8 MiB 才壓成 FLAC，工作在背景執行緒；短錄音直接送 WAV。
-- Groq 呼叫已有 30 秒 timeout、兩個模型與多把 API key 輪替，失敗間隔目前固定為 0.5 秒。
-- UI 已有錄音中、處理中、成功、失敗四種狀態與通知區狀態文字。
+- `paste_target.py`：前景視窗與貼上。不認識 app。
+- `transcription_errors.py`：錯誤分類、key／model 輪替、繁中可行動訊息、log 遮罩 API key。這取代了 T2／T4 的呼叫政策，沒有做成 `GroqTranscriber` class。
+- `recording_session.py`：錄音長度與開麥結果。不接收 app，不呼叫 Tk。執行緒與 `root.after` 留在 `GroqDictateApp`。
+- `groq_dictate.py`：仍包含 Windows 錄音執行緒、快捷鍵、通知區、設定 UI、FLAC 與上傳。FLAC 失敗回退 WAV 仍在 app，所以 T3 不算完成。
+- `transcription_interpreter.py`：獨立且可直接測試的轉錄 module。不要跟結構整理混在一起改詞彙或輸出政策。
 - API key 會驗證 `gsk_` 格式，儲存在 `%LOCALAPPDATA%\AZA-STT\dictate_settings.conf`，Windows 上會用 `icacls` 限制為目前使用者可讀。
-- 一部分 `except ...: pass` 位於最佳努力清理、解除 hook、讀取 PATH 等不應中斷主流程的位置；不能只憑 `pass` 判定錯誤被隱藏。
+- UI 錯誤只顯示 `status_detail`。不要再加一套與 `is_recording`／`is_processing_ui` 平行的 phase 旗標。
 
 ## 對 Devin 十點建議的判斷
 
@@ -35,7 +33,7 @@ Devin 的建議有一些值得做，但報告明顯沒有完整讀到目前版�
 | 1. 架構與組織 | 部分成立 | 不做四檔大拆分。先凍結 Groq 呼叫行為，再只抽出一個 `GroqTranscriber` module。錄音、UI、設定等到有第二個明確改動理由再拆。 |
 | 2. 錯誤處理 | 部分成立 | 已有 log、timeout、模型／key 輪替與 UI 錯誤狀態。值得補的是「哪些錯誤該重試」與可行動的使用者訊息；離線模式不做。 |
 | 3. 安全性 | 多數已處理 | 已有 key 格式驗證、原子寫入與 ACL。Credential Manager 可研究；完整性檢查價值低，因為能改檔的人通常也能改程式。 |
-| 4. 測試覆蓋 | 判斷錯誤 | 已有 76 tests，不必為了形式搬進 `tests/`。值得新增 Groq retry／錯誤分類 mock tests 與 CI。 |
+ | 4. 測試覆蓋 | 判斷錯誤 | 已有 76 tests，測試已搬進 `tests/` 以符合組織需求。值得新增 Groq retry／錯誤分類 mock tests 與 CI。 |
 | 5. 效能 | 缺乏證據 | OpenCC 已快取，FLAC 只處理長錄音且在背景執行。沒有量測前不改；先保留目前設計。 |
 | 6. 使用者體驗 | 少量值得做 | 已有狀態燈與通知區狀態。可改善錯誤訊息與解決方式；不加入使用統計、遙測或更多沒有實際需求的設定。 |
 | 7. 可維護／擴展 | 大多過度設計 | 常數與設定正規化已集中。只有 Groq 一個 provider，不做 provider interface、插件系統或環境變數設定框架。 |
@@ -59,8 +57,8 @@ Surface：
 
 Proof：
 
-- CI 執行 `python -m py_compile groq_dictate.py transcription_interpreter.py test_groq_dictate.py test_transcription_interpreter.py`。
-- CI 執行 `python -m unittest -q`。
+ - CI 執行 `python -m py_compile src/groq_dictate.py src/transcription_interpreter.py tests/test_groq_dictate.py tests/test_transcription_interpreter.py`。
+ - CI 執行 `python -m unittest -q` 從專案根目錄。
 - Windows runner 通過，且本機相同命令通過。
 
 Stop：不要在這張票加入自動 Release、簽章、安裝器、coverage gate 或多版本 Python matrix。
@@ -165,4 +163,4 @@ Stop：不自製加密、不把解密金鑰硬編碼進 EXE、不加入無法復
 
 ## 完成定義
 
-這份企劃不是要求全部實作。T1 可以立即做；T2、T3、T4 依序做；T5 先決策。完成每張票後重新評估下一張是否仍有必要。只要目前產品穩定、錯誤可理解、發布可重現，就不為了看起來像大型專案而繼續加架構。
+這份企劃不是要求全部實作。T4 已落地。剩下 T1，然後才考慮 T3；T5 先決策。不要重做錯誤分類，也不要為了行數再拆檔。

@@ -4,14 +4,18 @@ AZA-STT is a Windows desktop dictation tool. It records microphone audio, sends 
 
 ## Source map
 
-- `groq_dictate.py`: Windows integration, tray/UI, recording controls, microphone capture, settings, Groq requests/retries, and paste workflow.
-- `transcription_interpreter.py`: the transcription boundary. It accepts a complete Groq response and returns final pasteable text or a rejection reason. Prompt text, prompt-leakage filtering, timestamp punctuation, OpenCC conversion, technology-name corrections, and final formatting belong here.
-- `test_groq_dictate.py`: desktop workflow, settings, audio, controls, and packaging regressions.
-- `test_transcription_interpreter.py`: public-interface transcription behavior. Prefer testing `TranscriptionInterpreter.interpret()` instead of private helpers.
-- `TRANSCRIPTION_GLOSSARY.md`: human-readable vocabulary policy. Runtime truth remains in `transcription_interpreter.py`.
-- `build.ps1` and `AZA-STT.spec`: PyInstaller packaging.
+ - `src/groq_dictate.py`: Windows tray, hotkeys, microphone capture, settings, and paste workflow. It calls the modules below.
+ - `src/paste_target.py`: capture the foreground window and paste. Terminals use Ctrl+Shift+V. It must not take the app.
+ - `src/recording_session.py`: clip length and microphone-open result. It must not take the app or touch Tk.
+ - `src/transcription_errors.py`: Groq retry classification, key/model rotation, and the Traditional Chinese error shown to the user. Do not log or display API keys.
+ - `src/transcription_interpreter.py`: the transcription boundary. It accepts a complete Groq response and returns final pasteable text or a rejection reason. Prompt text, prompt-leakage filtering, timestamp punctuation, OpenCC conversion, technology-name corrections, and final formatting belong here.
+ - `tests/test_groq_dictate.py`: desktop workflow, settings, audio, controls, and packaging regressions.
+ - `tests/test_paste_target.py`, `tests/test_recording_session.py`, `tests/test_transcription_errors.py`: public behavior of those modules. Do not fake the app to test them.
+ - `tests/test_transcription_interpreter.py`: public-interface transcription behavior. Prefer testing `TranscriptionInterpreter.interpret()` instead of private helpers.
+ - `docs/TRANSCRIPTION_GLOSSARY.md`: human-readable vocabulary policy. Runtime truth remains in `src/transcription_interpreter.py`.
+ - `scripts/build.ps1`: PyInstaller packaging. Output goes to `dist/`, which is not source. Never delete a usable `dist/*.exe` during cleanup.
 
-Do not treat `archive/`, `bin/`, `build/`, `dist/`, or `release/` as source code. Do not overwrite `bin/` or publish a release unless the user explicitly asks.
+Do not treat `archive/`, `bin/`, `build/`, `dist/`, or `release/` as source code. Never delete usable dist executables as cleanup. Do not overwrite `bin/` or publish a release unless the user explicitly asks.
 
 ## Behavior that must remain stable
 
@@ -36,7 +40,7 @@ Do not treat `archive/`, `bin/`, `build/`, `dist/`, or `release/` as source code
 Use the project's Python 3.10 interpreter when plain `python` is unavailable:
 
 ```powershell
-& 'C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe' -m py_compile groq_dictate.py transcription_interpreter.py test_groq_dictate.py test_transcription_interpreter.py
+& 'C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe' -m py_compile src/groq_dictate.py src/paste_target.py src/recording_session.py src/transcription_errors.py src/transcription_interpreter.py tests/test_groq_dictate.py tests/test_paste_target.py tests/test_recording_session.py tests/test_transcription_errors.py tests/test_transcription_interpreter.py
 & 'C:\Users\user\AppData\Local\Programs\Python\Python310\python.exe' -m unittest -q
 ```
 

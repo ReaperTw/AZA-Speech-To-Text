@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # User uninstall for AZA-STT.
 # Double-click Uninstall-AZA-STT.cmd, or:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-AZA-STT.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\Uninstall-AZA-STT.ps1
 # Preview: add -WhatIf. Skip prompt: add -Force.
 # Does not delete this folder or any .git checkout.
 
@@ -12,6 +12,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+$projectRoot = Split-Path -Parent $PSScriptRoot
 
 $dataDir = Join-Path $env:LOCALAPPDATA "AZA-STT"
 $startupLnk = Join-Path ([Environment]::GetFolderPath("Startup")) "AZA-STT.lnk"
@@ -91,9 +93,9 @@ Get-AzaMeiFolders | ForEach-Object { Remove-Target -Path $_.FullName }
 
 foreach ($exeName in @("AZA-STT.exe")) {
     foreach ($exePath in @(
-            (Join-Path $PSScriptRoot $exeName),
-            (Join-Path $PSScriptRoot "bin\$exeName"),
-            (Join-Path $PSScriptRoot "dist\$exeName")
+            (Join-Path $projectRoot $exeName),
+            (Join-Path $projectRoot "bin\$exeName"),
+            (Join-Path $projectRoot "dist\$exeName")
         )) {
         if (Test-Path -LiteralPath $exePath) {
             Remove-Target -Path $exePath
@@ -121,7 +123,7 @@ if ($failed.Count -gt 0) {
 }
 
 Write-Output ""
-Write-Output "This folder was not removed: $PSScriptRoot"
+Write-Output "This folder was not removed: $projectRoot"
 Write-Output "If this is an extracted ZIP, remove the folder manually after uninstalling."
 Write-Output "If you downloaded a standalone exe, find and remove any other AZA-STT.exe copies manually."
 Write-Output "Removing local files does not revoke Groq keys. Revoke unused keys at https://console.groq.com/keys."

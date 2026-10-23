@@ -1,6 +1,7 @@
-import unittest
 import os
+import threading
 import tempfile
+import unittest
 import wave
 from unittest.mock import Mock, patch
 
@@ -77,6 +78,7 @@ class LoggingTests(unittest.TestCase):
 
         app.set_tray_status.assert_called_once_with("error")
         self.assertEqual(app.hide_timer_id, "timer-id")
+        _showerror.assert_not_called()
 
     @patch("groq_dictate.messagebox.showerror")
     def test_error_tray_status_does_not_report_background_execution(
@@ -95,6 +97,28 @@ class LoggingTests(unittest.TestCase):
         app.set_ui_error("網路逾時。請檢查網路後再錄一次。")
 
         self.assertNotIn("背景執行中", app.tray_status_text())
+
+
+class QuietSettingsTests(unittest.TestCase):
+    @patch("groq_dictate.messagebox")
+    def test_busy_settings_feedback_keeps_recording_and_processing_active(self, dialogs):
+        for method in (
+            "configure_record_key", "configure_microphone",
+            "configure_language", "configure_api_keys",
+        ):
+            for recording, processing in ((True, False), (False, True)):
+                with self.subTest(method=method, recording=recording):
+                    app = GroqDictateApp.__new__(GroqDictateApp)
+                    app.is_recording = recording
+                    app.is_processing_ui = processing
+                    app.language_mode = LANGUAGE_TRADITIONAL
+                    app.tray_icon = Mock()
+                    getattr(app, method)()
+                    self.assertEqual(app.is_recording, recording)
+                    self.assertEqual(app.is_processing_ui, processing)
+        dialogs.showwarning.assert_not_called()
+        dialogs.showinfo.assert_not_called()
+        dialogs.showerror.assert_not_called()
 
 
 class NormalizeTranscriptionTests(unittest.TestCase):
@@ -346,7 +370,7 @@ class ApiKeyConfigurationTests(unittest.TestCase):
 
         self.assertEqual(prompt_for_api_keys(parent=Mock()), expected)
         save_keys.assert_called_once_with(expected)
-        showinfo.assert_called_once()
+        showinfo.assert_not_called()
 
     @patch("groq_dictate.ApiKeySetupDialog")
     def test_configuration_dialog_can_be_cancelled(self, dialog):
@@ -436,7 +460,6 @@ class RecordingKeySettingsTests(unittest.TestCase):
         self.assertEqual(normalize_record_key("apps"), "menu")
         self.assertEqual(normalize_record_key("PageUp"), "page up")
         self.assertEqual(normalize_record_key("space"), "space")
-        self.assertEqual(normalize_record_key("ctrl"), "ctrl")
         self.assertEqual(normalize_record_key("mouse:x"), "mouse:x1")
         self.assertEqual(display_record_key("f8"), "F8")
         self.assertEqual(display_record_key("mouse:x2"), "滑鼠側鍵 2 (下一頁)")
@@ -582,6 +605,30 @@ class RecordingActivationModeTests(unittest.TestCase):
         app.start_recording_process.assert_called_once()
         app.on_key_up()
         app.stop_recording_process.assert_called_once()
+
+    def test_hold_release_before_capture_defers_stop(self):
+        app = self.make_app("hold")
+        app.capture_ready = False
+        app.is_recording = True
+        app.is_key_held = True
+        app.on_key_up()
+        app.stop_recording_process.assert_not_called()
+        self.assertTrue(app.stop_after_open)
+
+    def test_microphone_open_timeout_reports_exact_error(self):
+        app = GroqDictateApp.__new__(GroqDictateApp)
+        app.recording_started_event = threading.Event()
+        app.recording_error = None
+        app.is_recording = True
+        app.stop_after_open = False
+        app.root = Mock()
+        app.set_ui_error = Mock()
+
+        app.finish_microphone_open(timeout_seconds=0.01)
+
+        self.assertFalse(app.is_recording)
+        app.root.after.call_args[0][1]()
+        app.set_ui_error.assert_called_once_with("Microphone start timed out.")
 
     def test_mouse_filter_suppresses_only_selected_side_button(self):
         app = GroqDictateApp.__new__(GroqDictateApp)

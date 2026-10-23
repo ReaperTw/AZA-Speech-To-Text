@@ -15,7 +15,7 @@ Groq 目前提供的免费额度、模型、API 规格与服务可用性均由 G
 ## 主要功能
 
 - 使用 Groq Whisper 进行语音识别
-- 常用且容易误识别的 AI／科技名词整理在 [转录词汇清单](TRANSCRIPTION_GLOSSARY.md)
+ - 常用且容易误识别的 AI／科技名词整理在 [转录词汇清单](docs/TRANSCRIPTION_GLOSSARY.md)
 - 可切换简体中文或繁体中文 UI 与输出,第一次启动会根据 Windows 语言自动选择
 - 只转换字形,不会擅自把“脚本”改成“指令码”等不同词汇
 - 统一使用半角英文标点,并在标点后保留一个空格
@@ -43,7 +43,7 @@ AZA-STT 的核心功能已经基本完整。如果你想改变标点、简繁体
 - 想直接使用:下载 `AZA-STT.exe`
 - 想连同 README 与辅助工具一起保存:下载完整 ZIP 并解压
 
-下载后双击 `AZA-STT.exe` 即可启动,不需要另外安装。
+下载后双击 `AZA-STT.exe` 即可启动,不需要另外安装。本机项目则双击根目录的 **`Start-AZA-STT.cmd`**；它会打开 `dist\AZA-STT.exe`。
 
 ### 2. 设置 Groq API key
 
@@ -64,6 +64,10 @@ AZA-STT 的核心功能已经基本完整。如果你想改变标点、简繁体
 
 录音时会出现红色圆球,识别时会变成橙色,完成后显示绿色并自动消失。圆球消失不代表程序已经关闭,AZA-STT 仍会留在系统托盘等待下一次使用。
 
+没有录到声音、录音太短或识别失败时，只显示灰色状态和系统托盘错误文字，约三秒后自动收起，不弹出错误对话框；详细原因保留在日志中。
+
+平时不显示启动通知、重复打开提醒、设置保存成功或忙碌警告窗口。设置失败会写入日志并显示非阻塞状态；首次 API key 设置、API key 输入／保存错误，以及主动查看状态的窗口仍保留。
+
 ### 4. 设置录音控制与麦克风
 
 1. 在 Windows 右下角找到 AZA-STT 图标。
@@ -72,7 +76,7 @@ AZA-STT 的核心功能已经基本完整。如果你想改变标点、简繁体
 4. 选择录音方式。
 5. 点击 **保存**。
 
-键盘上的一般按键、功能键、Ctrl、Shift、Alt、空格键,以及常见的两颗鼠标侧键都能使用。选中的按键会被 AZA-STT 拦截,所以原本功能可能无法使用。
+Left Win 可以设为专用录音键；如果你的 Copilot 键被系统识别为 Left Win，也可沿用。选中的键及其按下／松开事件会被 AZA-STT 拦截，原本功能及使用该键的组合快捷键不保留，其他按键不受影响。一般按键、空格键和鼠标侧键也能使用；Ctrl、Alt、Shift 仍不接受。检测新按键时只监听，不拦截一般输入。
 
 录音方式共有三种:
 
@@ -114,12 +118,12 @@ AZA-STT 同一时间只会运行一个实例。它可能已经在系统托盘运
 
 ### 如何完整移除?
 
-AZA-STT 没有安装器。双击 `Uninstall-AZA-STT.cmd`（或运行 `Uninstall-AZA-STT.ps1`）会结束程序,并删除:
+AZA-STT 没有安装器。双击 `Uninstall-AZA-STT.cmd`（或运行 `scripts\Uninstall-AZA-STT.ps1`）会结束程序,并删除:
 
 - `%LOCALAPPDATA%\AZA-STT`（API key、设置、日志）
 - 开机启动文件夹里的 `AZA-STT.lnk`
 - 尚未清掉的临时录音
-- 这个文件夹里的 `AZA-STT.exe`（若存在）
+- 根目录、`bin/`、`dist/` 中的 `AZA-STT.exe`（若存在）
 
 解压后的 ZIP 文件夹请再手动删除。如果只下载过单独的 exe,在文件资源管理器搜索 `AZA-STT.exe` 后删除即可。本机删除后 Groq API key 仍然有效,不再使用请到 [Groq API Keys](https://console.groq.com/keys) 撤销。
 
@@ -134,8 +138,28 @@ AZA-STT 本身在你的 Windows 电脑上运行,没有自己的账号系统或�
 - 本地运行日志不会保存完整转录稿或 API key
 - 程序没有加入广告、用户追踪或遥测服务
 
-完整源代码公开在这个 Repository。如果对程序行为有疑问,可以直接检查 [`groq_dictate.py`](groq_dictate.py),交给熟悉 Python 的人查看,或使用 AI 代码工具协助检查后再运行。
+完整源代码公开在这个 Repository。如果对程序行为有疑问，可以直接检查 [`src/groq_dictate.py`](src/groq_dictate.py)，交给熟悉 Python 的人查看，或使用 AI 代码工具协助检查后再运行。
 
 ## 授权
 
 AZA-STT 使用 [MIT License](LICENSE)。
+
+## 项目目录与开发
+
+- `src/`：应用程序源代码。
+- `tests/`：测试；从项目根目录运行 `python -m unittest -q`。
+- `scripts/`：打包、开机启动和移除脚本。
+- `docs/`：改进计划、转录词汇清单和配置示例。
+- `dist/`：可使用的 EXE；不要当作整理垃圾删除。
+- 打包中间文件和自动生成的 spec 放在 `%TEMP%\AZA-STT-build`，不堆在项目内。
+
+开发命令（在项目根目录运行）：
+
+```powershell
+python -m pip install -r requirements-dev.txt
+python src/groq_dictate.py
+python -m unittest -q
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build.ps1
+```
+
+根目录的 `Start-AZA-STT.cmd` 用于启动，`Configure-AZA-STT.cmd` 打开设置，`Uninstall-AZA-STT.cmd` 完整移除。启动和设置入口依次查找同目录、`bin/`、`dist/` 中的 EXE。

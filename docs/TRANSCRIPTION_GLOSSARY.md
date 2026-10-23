@@ -9,7 +9,7 @@
 - **Canonical** 是最後希望貼出的寫法。
 - **常見辨識變體** 是提示詞或後處理值得照顧的拼法，不代表每個變體都能安全自動改寫。
 - 兩個詞如果發音接近但意義不同，保留兩者並記錄歧義，不要用無條件替換把它們合併。
-- 新增詞彙時，依用途更新 `transcription_interpreter.py` 的 `PROMPT_TERMS` 或 `TECH_TERM_CORRECTIONS`，並同步更新 `test_transcription_interpreter.py`；文件是可讀的索引，不是執行期設定檔。
+- 新增詞彙時，依用途更新 `src/transcription_interpreter.py` 的 `PROMPT_TERMS` 或 `TECH_TERM_CORRECTIONS`，並同步更新 `tests/test_transcription_interpreter.py`；文件是可讀的索引，不是執行期設定檔。
 - 只加入實際常講或確實容易辨識錯誤的詞，避免把所有歷史模型名稱塞進 Whisper prompt。
 
 ## 目前優先詞彙

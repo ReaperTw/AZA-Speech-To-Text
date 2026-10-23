@@ -1,11 +1,15 @@
 $ErrorActionPreference = "Stop"
 
-$exePath = Join-Path $PSScriptRoot "AZA-STT.exe"
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$exePath = Join-Path $projectRoot "AZA-STT.exe"
 if (-not (Test-Path -LiteralPath $exePath)) {
-    $exePath = Join-Path $PSScriptRoot "bin\AZA-STT.exe"
+    $exePath = Join-Path $projectRoot "bin\AZA-STT.exe"
 }
 if (-not (Test-Path -LiteralPath $exePath)) {
-    throw "AZA-STT.exe was not found beside this script or under bin."
+    $exePath = Join-Path $projectRoot "dist\AZA-STT.exe"
+}
+if (-not (Test-Path -LiteralPath $exePath)) {
+    throw "AZA-STT.exe was not found in root, bin\ or dist\."
 }
 
 $startupFolder = [Environment]::GetFolderPath("Startup")

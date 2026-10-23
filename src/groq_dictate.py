@@ -45,10 +45,9 @@ from pynput import mouse as pynput_mouse
 
 from paste_target import capture_foreground, paste_text
 from recording_session import (
-    arm_recording_start,
     clip_rejection,
     hit_duration_cap,
-    note_hold_release,
+    microphone_open_outcome,
 )
 from transcription_errors import present_error, transcribe_with_rotation
 
@@ -62,7 +61,11 @@ from transcription_interpreter import (
 )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else SCRIPT_DIR
+APP_DIR = (
+    os.path.dirname(sys.executable)
+    if getattr(sys, "frozen", False)
+    else os.path.dirname(SCRIPT_DIR)
+)
 APP_DATA_DIR = os.path.join(
     os.environ.get("LOCALAPPDATA", tempfile.gettempdir()),
     "AZA-STT",
@@ -340,6 +343,11 @@ def normalize_record_key(key):
     if not normalized or normalized.startswith(MOUSE_TRIGGER_PREFIX):
         return None
     try:
+        canonical = keyboard.normalize_name(normalized)
+        if keyboard.is_modifier(canonical) and canonical not in (
+            "windows", "left windows", "right windows"
+        ):
+            return None
         keyboard.key_to_scan_codes(normalized)
         return normalized
     except (ValueError, KeyError):
@@ -891,7 +899,7 @@ class RecordKeySetupDialog(simpledialog.Dialog):
         try:
             self.capture_keyboard_hook = keyboard.hook(
                 self.capture_keyboard_event,
-                suppress=True,
+                suppress=False,
             )
             self.capture_mouse_listener = pynput_mouse.Listener(
                 on_click=self.capture_mouse_event,
@@ -947,7 +955,7 @@ class RecordKeySetupDialog(simpledialog.Dialog):
         normalized = normalize_record_key(key)
         if not normalized:
             self.capture_status_var.set(
-                self.ui(f"無法辨識「{key}」,請再試一次。")
+                self.ui(f"「{key}」不能作為錄音鍵。可選 Left Win、一般按鍵或滑鼠側鍵，不要選 Ctrl、Alt、Shift。")
             )
             return
         self.selected_key = normalized
@@ -1213,11 +1221,6 @@ def prompt_for_api_keys(parent=None, language_mode=None):
             )
             return []
 
-        messagebox.showinfo(
-            "AZA-STT",
-            ui_text("Groq API key 已儲存。", language_mode),
-            parent=dialog_parent,
-        )
         return keys
     finally:
         if owns_root:
@@ -1353,10 +1356,7 @@ def run_hotkey_self_test():
     hooks = []
     mouse_listener = None
     try:
-        hooks = [
-            keyboard.on_press_key("f12", lambda event: None, suppress=True),
-            keyboard.on_release_key("f12", lambda event: None, suppress=True),
-        ]
+        hooks = [keyboard.hook_key("f12", lambda event: False, suppress=True)]
         mouse_listener = pynput_mouse.Listener(
             on_click=lambda x, y, button, pressed, injected=False: None,
         )
@@ -1474,7 +1474,6 @@ class GroqDictateApp:
         self.is_recording = False
         self.recording_started_event = Event()
         self.recording_error = None
-        self.ui_phase = "idle"
         self.status_detail = None
         self.paste_hwnd = None
         self.stop_after_open = False
@@ -1553,14 +1552,22 @@ class GroqDictateApp:
             self.mouse_listener.start()
         else:
             self.keyboard_hooks = [
-                keyboard.on_press_key(self.record_key, self.on_key_down, suppress=True),
-                keyboard.on_release_key(self.record_key, self.on_key_up, suppress=True),
+                keyboard.hook_key(
+                    self.record_key, self.on_record_key_event, suppress=True
+                ),
             ]
         log_info(
             "Recording control bound: "
             f"{display_record_key(self.record_key)}, "
             f"{display_activation_mode(self.activation_mode)}"
         )
+
+    def on_record_key_event(self, event):
+        if event.event_type == keyboard.KEY_DOWN:
+            self.on_key_down(event)
+        elif event.event_type == keyboard.KEY_UP:
+            self.on_key_up(event)
+        return False
 
     def unbind_record_key(self):
         for hook in self.keyboard_hooks:
@@ -1647,26 +1654,46 @@ class GroqDictateApp:
     def on_key_up(self, event=None):
         was_held = self.is_key_held
         self.is_key_held = False
-        if was_held and self.activation_mode == "hold":
-            action = note_hold_release(self)
-            if action == "stop_now":
-                log_info("Hold control released, stopping recording...")
-                self.stop_recording_process()
+        if not was_held or self.activation_mode != "hold":
+            return
+        if self.capture_ready:
+            self.stop_after_open = False
+            log_info("Hold control released, stopping recording...")
+            self.stop_recording_process()
+            return
+        self.stop_after_open = True
 
     def start_recording_process(self):
         if self.is_recording or self.is_processing_ui:
             return
         self.cancel_event.clear()
         self.capture_ready = False
-        arm_recording_start(
-            self,
-            capture_foreground,
-            MICROPHONE_START_TIMEOUT_SECONDS,
-            lambda: threading.Thread(
-                target=self.record_thread,
-                daemon=True,
-            ).start(),
+        self.paste_hwnd = capture_foreground()
+        self.is_recording = True
+        self.frames = []
+        self.recording_error = None
+        self.stop_after_open = False
+        self.recording_started_event.clear()
+        threading.Thread(target=self.record_thread, daemon=True).start()
+        threading.Thread(target=self.finish_microphone_open, daemon=True).start()
+
+    def finish_microphone_open(self, timeout_seconds=MICROPHONE_START_TIMEOUT_SECONDS):
+        outcome = microphone_open_outcome(
+            not self.recording_started_event.wait(timeout_seconds),
+            self.recording_error,
+            self.is_recording,
+            self.stop_after_open,
         )
+        if outcome == "timeout":
+            self.is_recording = False
+            self.root.after(
+                0,
+                lambda: self.set_ui_error("Microphone start timed out."),
+            )
+        elif outcome == "stop":
+            self.root.after(0, self.stop_recording_process)
+        elif outcome == "recording":
+            self.root.after(0, self.set_ui_recording)
 
     def stop_recording_process(self):
         if not self.capture_ready:
@@ -1973,17 +2000,9 @@ class GroqDictateApp:
 
     def on_tray_ready(self, icon):
         icon.visible = True
-        try:
-            icon.notify(
-                self.ui("AZA-STT 已縮到 Windows 右下角通知區。\n")
-                + f"{self.recording_instruction()}.",
-                self.ui("AZA-STT 正在背景執行"),
-            )
-        except Exception as error:
-            log_info(f"Startup tray notification failed: {error}")
 
     def tray_status_text(self):
-        if self.ui_phase == "error":
+        if self.status_detail:
             return self.status_detail
         if self.is_recording:
             return self.ui("AZA-STT - 錄音中")
@@ -2049,11 +2068,7 @@ class GroqDictateApp:
 
     def configure_record_key(self):
         if self.is_recording or self.is_processing_ui:
-            messagebox.showwarning(
-                "AZA-STT",
-                self.ui("請先完成目前的錄音或語音辨識,再更換錄音控制。"),
-                parent=self.root,
-            )
+            self.set_status_detail("請先完成目前的錄音或語音辨識,再更換錄音控制。")
             return
 
         previous_key = self.record_key
@@ -2081,33 +2096,17 @@ class GroqDictateApp:
             )
             if self.tray_icon:
                 self.tray_icon.update_menu()
-            messagebox.showinfo(
-                "AZA-STT",
-                self.ui(
-                    f"錄音控制已儲存。\n"
-                    f"{self.recording_instruction()}。"
-                ),
-                parent=self.root,
-            )
         except Exception as error:
             self.record_key = previous_key
             self.activation_mode = previous_mode
             log_info(f"Failed to change recording control: {error}")
-            messagebox.showerror(
-                "AZA-STT",
-                self.ui(f"無法儲存錄音控制:\n{error}"),
-                parent=self.root,
-            )
+            self.set_ui_error("無法儲存錄音控制。請在記錄檔查看原因。")
         finally:
             self.bind_record_key()
 
     def configure_microphone(self):
         if self.is_recording or self.is_processing_ui:
-            messagebox.showwarning(
-                "AZA-STT",
-                self.ui("請先完成目前的錄音或語音辨識,再更換麥克風。"),
-                parent=self.root,
-            )
+            self.set_status_detail("請先完成目前的錄音或語音辨識,再更換麥克風。")
             return
 
         try:
@@ -2127,30 +2126,13 @@ class GroqDictateApp:
             )
             if self.tray_icon:
                 self.tray_icon.update_menu()
-            messagebox.showinfo(
-                "AZA-STT",
-                self.ui(
-                    "麥克風設定已儲存。\n"
-                    f"目前: "
-                    f"{display_microphone_name(self.microphone_name, self.language_mode)}"
-                ),
-                parent=self.root,
-            )
         except Exception as error:
             log_info(f"Failed to change microphone: {error}")
-            messagebox.showerror(
-                "AZA-STT",
-                self.ui(f"無法儲存麥克風設定:\n{error}"),
-                parent=self.root,
-            )
+            self.set_ui_error("無法儲存麥克風設定。請在記錄檔查看原因。")
 
     def configure_language(self):
         if self.is_recording or self.is_processing_ui:
-            messagebox.showwarning(
-                "AZA-STT",
-                self.ui("請先完成目前的錄音或語音辨識,再切換語言。"),
-                parent=self.root,
-            )
+            self.set_status_detail("請先完成目前的錄音或語音辨識,再切換語言。")
             return
 
         previous_language = self.language_mode
@@ -2175,31 +2157,15 @@ class GroqDictateApp:
                 "Language mode changed to "
                 f'"{self.language_mode}".'
             )
-            messagebox.showinfo(
-                "AZA-STT",
-                self.ui(
-                    "語言設定已儲存。\n"
-                    f"目前: {display_language_mode(self.language_mode)}"
-                ),
-                parent=self.root,
-            )
         except Exception as error:
             self.language_mode = previous_language
             self.set_transcription_interpreter()
             log_info(f"Failed to change language mode: {error}")
-            messagebox.showerror(
-                "AZA-STT",
-                self.ui(f"無法儲存語言設定:\n{error}"),
-                parent=self.root,
-            )
+            self.set_ui_error("無法儲存語言設定。請在記錄檔查看原因。")
 
     def configure_api_keys(self):
         if self.is_recording or self.is_processing_ui:
-            messagebox.showwarning(
-                "AZA-STT",
-                self.ui("請先完成目前的錄音或語音辨識,再更換 API key。"),
-                parent=self.root,
-            )
+            self.set_status_detail("請先完成目前的錄音或語音辨識,再更換 API key。")
             return
 
         keys = prompt_for_api_keys(
@@ -2216,20 +2182,20 @@ class GroqDictateApp:
 
     def open_keys_page_from_tray(self):
         if not open_groq_keys_page():
-            messagebox.showerror(
-                "AZA-STT",
-                self.ui(f"無法開啟瀏覽器。\n\n{GROQ_KEYS_URL}"),
-                parent=self.root,
-            )
+            self.set_ui_error("無法開啟瀏覽器。請手動開啟 Groq API Keys 網頁。")
     def open_log_from_tray(self):
         try:
             os.startfile(LOG_FILE_PATH)
         except Exception as error:
-            messagebox.showerror(
-                "AZA-STT",
-                self.ui(f"無法開啟記錄檔。\n\n{LOG_FILE_PATH}\n\n{error}"),
-                parent=self.root,
-            )
+            log_info(f"Failed to open log file: {error}")
+            self.set_ui_error("無法開啟記錄檔。請檢查檔案是否存在。")
+
+    def set_status_detail(self, message):
+        """Update tray feedback without changing an active recording or request."""
+        self.status_detail = self.ui(message)
+        log_info(self.status_detail)
+        status = "recording" if self.is_recording else "processing" if self.is_processing_ui else "idle"
+        self.set_tray_status(status)
 
     def set_tray_status(self, status):
         if not self.tray_icon:
@@ -2249,7 +2215,6 @@ class GroqDictateApp:
     def set_ui_idle(self):
         self.cancel_hide_timer()
         self.is_processing_ui = False
-        self.ui_phase = "idle"
         self.status_detail = None
         self.root.withdraw()
         self.set_tray_status("idle")
@@ -2257,8 +2222,7 @@ class GroqDictateApp:
     def set_ui_recording(self):
         self.cancel_hide_timer()
         self.is_processing_ui = False
-        self.ui_phase = "recording"
-        self.status_detail = ""
+        self.status_detail = None
         self.root.deiconify()
         self.canvas.itemconfig(self.sphere, fill='#ff1a1a', outline='#4d0000', width=2)
         self.canvas.config(cursor="hand2")
@@ -2267,8 +2231,7 @@ class GroqDictateApp:
     def set_ui_processing(self):
         self.cancel_hide_timer()
         self.is_processing_ui = True
-        self.ui_phase = "processing"
-        self.status_detail = ""
+        self.status_detail = None
         self.canvas.itemconfig(self.sphere, fill='#FF851B', outline='#B35900', width=2)
         self.canvas.config(cursor="watch")
         self.set_tray_status("processing")
@@ -2276,8 +2239,7 @@ class GroqDictateApp:
     def set_ui_success(self):
         self.cancel_hide_timer()
         self.is_processing_ui = False
-        self.ui_phase = "success"
-        self.status_detail = ""
+        self.status_detail = None
         self.canvas.itemconfig(self.sphere, fill='#2ECC40', outline='#145A32', width=2)
         self.set_tray_status("success")
         self.hide_timer_id = self.root.after(1000, self.set_ui_idle)
@@ -2286,13 +2248,11 @@ class GroqDictateApp:
         self.cancel_hide_timer()
         message = present_error(message)
         self.is_processing_ui = False
-        self.ui_phase = "error"
         self.status_detail = message
         self.canvas.itemconfig(self.sphere, fill='#666666', outline='#333333', width=2)
         self.canvas.config(cursor="x_cursor")
         log_info(f"❌ Error: {message}")
         self.set_tray_status("error")
-        messagebox.showerror("AZA-STT", message, parent=self.root)
         self.hide_timer_id = self.root.after(3000, self.set_ui_idle)
 
     def show_popup_menu(self, event):
@@ -2345,18 +2305,6 @@ if __name__ == "__main__":
     instance_handle = acquire_single_instance()
     if not instance_handle:
         log_info("Another AZA-STT instance is already running.")
-        if sys.platform == "win32":
-            language_mode = load_user_language_mode()
-            ctypes.windll.user32.MessageBoxW(
-                0,
-                ui_text(
-                    "AZA-STT 已經在背景執行。\n\n"
-                    "請在 Windows 右下角通知區尋找 AZA-STT 圖示。",
-                    language_mode,
-                ),
-                "AZA-STT",
-                0x40,
-            )
         sys.exit(0)
     app = GroqDictateApp(instance_handle=instance_handle)
     app.run()
