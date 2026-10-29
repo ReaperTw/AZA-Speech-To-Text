@@ -38,7 +38,7 @@ AZA-STT 的核心功能已经基本完整。如果你想改变标点、简繁体
 
 ### 1. 下载并启动
 
-从 [GitHub Releases](https://github.com/ReaperTw/AZA-STT/releases/latest) 下载最新版本。
+从 [GitHub Releases](https://github.com/ReaperTw/AZA-Speech-To-Text/releases/latest) 下载最新版本。
 
 - 想直接使用:下载 `AZA-STT.exe`
 - 想连同 README 与辅助工具一起保存:下载完整 ZIP 并解压
