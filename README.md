@@ -45,6 +45,10 @@ AZA-STT 的核心功能已經大致完整。如果你想改變標點、繁簡體
 
 下載後雙擊 `AZA-STT.exe` 即可啟動,不需要另外安裝。本機專案則雙擊根目錄的 **`Start-AZA-STT.cmd`**；它會開啟 `dist\AZA-STT.exe`。
 
+本機開始功能表的 `AZA-STT.lnk` 使用 `assets/app-icon.ico`；捷徑仍指向 `dist\AZA-STT.exe`，不改動啟動參數。圖示為「Voice Cursor」（聲波＋文字游標），延續 AZA-Modded-CCusage 的深色圓角底與薄荷綠。
+
+圖示依 [kaankiziltug/logo-design-skill](https://github.com/kaankiziltug/logo-design-skill) 的概念比較、SVG audit、小尺寸預覽與 ICO 匯出流程製作。向量原稿是 `assets/app-icon.svg`，ICO 包含 16、20、24、32、40、48、64、128、256 px。此次只套用本機開始功能表捷徑，未重建或修改 EXE 內嵌圖示。
+
 ### 2. 設定 Groq API key
 
 第一次啟動時,AZA-STT 會依 Windows 語言選擇繁體或簡體介面,並自動開啟設定視窗。
